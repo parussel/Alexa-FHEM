@@ -1,0 +1,120 @@
+Alexa-FHEM 0.5.64-sha2.1 – Änderungsstand 2
+Kopiertext für den automatischen Startup-Wiederanlauf
+=====================================================
+
+Gilt nur für lib/server.js mit dieser Ausgangsprüfsumme:
+2d8796b95be7c1da7a029a2c43dafb995debbfda33aa1f7e35a9c6b45017ee98
+
+Vorher sichern. Bei anderer Prüfsumme oder Version abbrechen.
+Die vollständigen Sicherheits- und Prüfschritte stehen in:
+docs/NACHTRAG-STARTUP-WIEDERANLAUF.md
+
+
+EINFÜGESTELLE 1 VON 3 – bisherigen Startup-Block ersetzen
+----------------------------------------------------------
+
+In Server.prototype.startProxy unmittelbar nach der vorhandenen Zeile
+
+    this._config.sshproxy.server = server;
+
+den bisherigen Block ab
+
+    log.info ("*** SSH: checking proxy configuration");
+
+bis einschließlich des zugehörigen .catch(...)-Blocks entfernen und durch
+diese beiden Zeilen ersetzen:
+
+    this._sshStartupStopped = false;
+    this._startSshProxyWithRetry(fhem, alexaDevName);
+
+
+EINFÜGESTELLE 2 VON 3 – drei Methoden einfügen
+------------------------------------------------
+
+Unmittelbar nach der schließenden Klammer von Server.prototype.startProxy
+und vor Server.prototype.startProxy2 den folgenden vollständigen Block
+einfügen:
+
+Server.prototype._isTransientSshStartupError = function(error) {
+  const transientCodes = new Set([
+    'EAI_AGAIN', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH',
+    'ECONNRESET', 'ECONNREFUSED'
+  ]);
+  for(let current = error; current; current = current.cause) {
+    if(transientCodes.has(current.code)) return true;
+  }
+  const message = String(error && error.message !== undefined ? error.message : error);
+  return /proxy command timed out|\bEAI_AGAIN\b|\bETIMEDOUT\b|\bENETUNREACH\b|\bEHOSTUNREACH\b|\bECONNRESET\b|\bECONNREFUSED\b/i.test(message);
+}
+
+Server.prototype._cancelSshStartupRetry = function() {
+  this._sshStartupStopped = true;
+  if(this._sshStartupRetryTimer !== undefined) {
+    clearTimeout(this._sshStartupRetryTimer);
+    this._sshStartupRetryTimer = undefined;
+  }
+}
+
+Server.prototype._startSshProxyWithRetry = async function(fhem, alexaDevName) {
+  if(this._sshStartupStopped || this._sshStartupRetryTimer !== undefined) return;
+
+  log.info("*** SSH: checking proxy configuration");
+  try {
+    const result = await User.autoConfig(false, this._config, fhem, alexaDevName);
+    if(this._sshStartupStopped) return;
+    this._sshStartupRetryAttempt = 0;
+    log.info("*** SSH: proxy configuration set up done");
+    this.open_ssh(this._config.sshproxy);
+    if(typeof result === "object" && result !== null && result.hasOwnProperty('bearerToken')) {
+      log.info('SSH setup completed with new bearer token');
+      published_tokens.push(result.bearerToken);
+    }
+  } catch(error) {
+    const message = error && error.message !== undefined ? error.message : String(error);
+    log.error('*** SSH: proxy configuration failed: ' + message);
+    if(!this._isTransientSshStartupError(error)) {
+      this.set_ssh_state('error', message);
+      return;
+    }
+
+    const attempt = this._sshStartupRetryAttempt || 0;
+    const delay = Math.min(30000 * Math.pow(2, attempt), 300000);
+    this._sshStartupRetryAttempt = attempt + 1;
+    const retryAt = new Date(Date.now() + delay).toLocaleTimeString();
+    this.set_ssh_state('error', message + '; retry at ' + retryAt);
+    log.warn('*** SSH: transient startup failure; retrying in ' + delay/1000 + ' seconds');
+    this._sshStartupRetryTimer = setTimeout(() => {
+      this._sshStartupRetryTimer = undefined;
+      if(!this._sshStartupStopped) this._startSshProxyWithRetry(fhem, alexaDevName);
+    }, delay);
+  }
+}
+
+
+EINFÜGESTELLE 3 VON 3 – Shutdown ergänzen
+------------------------------------------
+
+In der vorhandenen Funktion
+
+    Server.prototype.shutdown = function() {
+
+direkt nach der öffnenden Klammer diese Zeile einfügen:
+
+  this._cancelSshStartupRetry();
+
+
+ABSCHLUSSPRÜFUNG
+----------------
+
+Ausführen:
+
+    node --check lib/server.js
+    sha256sum lib/server.js
+
+Erwartete Zielprüfsumme:
+cd446c875295d19df5d00cd077a70bc621f8151bbd893b63dc2a2b1669f43192
+
+Danach ausschließlich Alexa-FHEM kontrolliert neu starten und prüfen:
+alexaFHEM.ProxyConnection = running; SSH connected
+
+Anschließend einen unkritischen Lichtaktor per Sprache testen.

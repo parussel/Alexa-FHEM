@@ -1,0 +1,97 @@
+# Nur die selbst entwickelte Änderung; kein vollständiger Originalquelltext.
+# Anwendung nach privater Sicherung: git apply alexa-fhem-0.5.64-sha2-startup-retry.patch
+--- a/lib/server.js
++++ b/lib/server.js
+@@ -195,24 +195,67 @@ Server.prototype.startProxy = function(fhem, alexaDevName) {
+     log.info("Server listening on: http://%s:%s for proxy connections", server.address().address, server.address().port);
+     this._config.sshproxy.server = server;
+ 
+-    log.info ("*** SSH: checking proxy configuration");
+-    var startupPromise = User.autoConfig(false, this._config, fhem, alexaDevName);
+-    startupPromise.then ( (r) => {
+-      log.info("*** SSH: proxy configuration set up done");
+-      this.open_ssh(this._config.sshproxy);
+-      // This fixes (hopefully) a race condition: Initial SSH setup takes longer than server setup
+-      if (typeof r === "object" && r.hasOwnProperty('bearerToken')) {
+-        log.info ('SSH setup completed with new bearer token');
+-        published_tokens.push(r.bearerToken);
+-      }
+-    }).catch((e) => {
+-      log.error('*** SSH: proxy configuration failed: ' + e);
+-      setTimeout( ()=>{ this.set_ssh_state( 'error', e ); }, 1000);
+-    });
++    this._sshStartupStopped = false;
++    this._startSshProxyWithRetry(fhem, alexaDevName);
+ 
+   }.bind(this) );
+ }
+ 
++Server.prototype._isTransientSshStartupError = function(error) {
++  const transientCodes = new Set([
++    'EAI_AGAIN', 'ETIMEDOUT', 'ENETUNREACH', 'EHOSTUNREACH',
++    'ECONNRESET', 'ECONNREFUSED'
++  ]);
++  for(let current = error; current; current = current.cause) {
++    if(transientCodes.has(current.code)) return true;
++  }
++  const message = String(error && error.message !== undefined ? error.message : error);
++  return /proxy command timed out|\bEAI_AGAIN\b|\bETIMEDOUT\b|\bENETUNREACH\b|\bEHOSTUNREACH\b|\bECONNRESET\b|\bECONNREFUSED\b/i.test(message);
++}
++
++Server.prototype._cancelSshStartupRetry = function() {
++  this._sshStartupStopped = true;
++  if(this._sshStartupRetryTimer !== undefined) {
++    clearTimeout(this._sshStartupRetryTimer);
++    this._sshStartupRetryTimer = undefined;
++  }
++}
++
++Server.prototype._startSshProxyWithRetry = async function(fhem, alexaDevName) {
++  if(this._sshStartupStopped || this._sshStartupRetryTimer !== undefined) return;
++
++  log.info("*** SSH: checking proxy configuration");
++  try {
++    const result = await User.autoConfig(false, this._config, fhem, alexaDevName);
++    if(this._sshStartupStopped) return;
++    this._sshStartupRetryAttempt = 0;
++    log.info("*** SSH: proxy configuration set up done");
++    this.open_ssh(this._config.sshproxy);
++    if(typeof result === "object" && result !== null && result.hasOwnProperty('bearerToken')) {
++      log.info('SSH setup completed with new bearer token');
++      published_tokens.push(result.bearerToken);
++    }
++  } catch(error) {
++    const message = error && error.message !== undefined ? error.message : String(error);
++    log.error('*** SSH: proxy configuration failed: ' + message);
++    if(!this._isTransientSshStartupError(error)) {
++      this.set_ssh_state('error', message);
++      return;
++    }
++
++    const attempt = this._sshStartupRetryAttempt || 0;
++    const delay = Math.min(30000 * Math.pow(2, attempt), 300000);
++    this._sshStartupRetryAttempt = attempt + 1;
++    const retryAt = new Date(Date.now() + delay).toLocaleTimeString();
++    this.set_ssh_state('error', message + '; retry at ' + retryAt);
++    log.warn('*** SSH: transient startup failure; retrying in ' + delay/1000 + ' seconds');
++    this._sshStartupRetryTimer = setTimeout(() => {
++      this._sshStartupRetryTimer = undefined;
++      if(!this._sshStartupStopped) this._startSshProxyWithRetry(fhem, alexaDevName);
++    }, delay);
++  }
++}
++
+ Server.prototype.startProxy2 = function(fhem, alexaDevName) {
+   if( this._config.sshproxy.server !== undefined ) {
+     return;
+@@ -1092,6 +1135,7 @@ Server.prototype.run = function() {
+ }
+ 
+ Server.prototype.shutdown = function() {
++  this._cancelSshStartupRetry();
+   if( this._config.sshproxy )
+     this.set_ssh_state( 'stopping', 'alexa-fhem terminating' );
+ 
+
+
+

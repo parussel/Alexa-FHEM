@@ -7,6 +7,9 @@ Diese deutschsprachige Anleitung beschreibt, wie erfahrene FHEM-Anwender eine vo
 ## Einstieg
 
 - [Schritt-für-Schritt-Anleitung](docs/ANLEITUNG-LOKALE-ALEXA-FHEM-SHA2-UMSTELLUNG.md)
+- [Nachtrag: automatischer Wiederanlauf nach DNS-/Netzfehler beim Start](docs/NACHTRAG-STARTUP-WIEDERANLAUF.md)
+- [Einfüge-Patch für den Wiederanlauf](downloads/alexa-fhem-startup-retry.patch)
+- [Kopiertext für die drei Einfügestellen](downloads/alexa-fhem-startup-retry-einfuegetext.txt)
 - [Hilfsdatei `native-ssh.js` herunterladen](downloads/native-ssh.js)
 - [Herkunft und Zuordnung](ATTRIBUTION.md)
 - [153er-netz.de – Entwicklung](https://153er-netz.de/seiten/entwicklung.html)
@@ -16,6 +19,22 @@ Die Anleitung setzt eine bestehende Installation auf Basis von Version 0.5.64 un
 ## Umfang
 
 Veröffentlicht werden die Anleitung und die eigens erstellte Hilfsdatei. Die vollständigen Upstream-Dateien, private Testdaten und interne Entwicklungsunterlagen sind nicht Bestandteil dieses Repositorys. Die Anleitung enthält die erforderlichen Änderungsblöcke, damit Nutzer die Anpassung lokal selbst vornehmen können.
+
+## Nachtrag: automatischer Wiederanlauf des SSH-Tunnels (11.11.2026)
+
+Nach einem Raspberry-Neustart trat während der einmaligen Proxy-Konfigurationsprüfung ein vorübergehender DNS-/Netzfehler auf. Ausgehende Temperaturmeldungen funktionierten anschließend wieder, eingehende Alexa-Schaltbefehle jedoch nicht: Der eigentliche SSH-Tunnel war wegen des fehlgeschlagenen Startchecks nie geöffnet worden, sodass dessen vorhandene Reconnect-Logik nicht greifen konnte.
+
+Der neue [Nachtrag](docs/NACHTRAG-STARTUP-WIEDERANLAUF.md) ergänzt für den hier veröffentlichten SHA2-Kandidaten einen begrenzten Wiederanlauf ausschließlich bei bekannten vorübergehenden Netzfehlern. Veröffentlicht wird wiederum nur der kleine Änderungshunk zum lokalen Einfügen, keine vollständige Upstream-Datei. Der Kandidat bestand 29 automatisierte Tests auf dem Raspberry Pi 4 und anschließend einen realen Sprachtest mit einem unkritischen Lichtaktor.
+
+### Veröffentlichte Änderungsstände
+
+| Stand | Inhalt | Ergebnis |
+| --- | --- | --- |
+| Ausgangsbasis | Alexa-FHEM 0.5.64 | Unveränderter Upstream-Stand; nicht Bestandteil dieses Repositorys |
+| Änderungsstand 1 | Lokale RSA/SHA2-Umstellung | Paketkennung `0.5.64-sha2.1`; native SSH-Verbindung mit bestehender Identität und Registrierung |
+| Änderungsstand 2 | Änderungsstand 1 plus Startup-Wiederanlauf | Aktueller hier geprüfter Gesamtstand; `lib/server.js` erhält den begrenzten DNS-/Netz-Wiederanlauf |
+
+Änderungsstand 2 baut zwingend auf Änderungsstand 1 auf. Die Paketkennung bleibt `0.5.64-sha2.1`, weil die zweite Ergänzung nur `lib/server.js` ändert und `package.json` bewusst unangetastet lässt. Die [Hauptanleitung](docs/ANLEITUNG-LOKALE-ALEXA-FHEM-SHA2-UMSTELLUNG.md) führt nun in einer Reihenfolge durch beide Änderungen bis zum aktuell getesteten Gesamtstand.
 
 ## Nachtrag: Veraltete Temperaturwerte in Alexa (22.10.2026)
 

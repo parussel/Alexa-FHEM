@@ -371,6 +371,29 @@ c4a2fb7fb94a1ad67f3ead6d7baea318fb910caeb95501590401fbc0e3a92a45  lib/native-ssh
 
 Prüfsummen müssen genau übereinstimmen. Die Originaldateien enthalten an mehreren Stellen notwendige Änderungen; nur einzelne Zeilen manuell auszutauschen ist nicht Teil dieser geprüften Anleitung.
 
+### 5a. Änderungsstand 2: automatischen Startup-Wiederanlauf ergänzen
+
+Bis hierhin ist **Änderungsstand 1** hergestellt: die lokale RSA/SHA2-Umstellung mit der Paketkennung `0.5.64-sha2.1`. Der aktuell auf dem Referenzsystem laufende **Änderungsstand 2** ergänzt darauf aufbauend den begrenzten Wiederanlauf nach einem vorübergehenden DNS-/Netzfehler während der ersten Proxy-Konfigurationsprüfung.
+
+Die Paketkennung bleibt `0.5.64-sha2.1`, weil diese zweite Änderung ausschließlich `lib/server.js` betrifft und `package.json` nicht verändert. Vor der Ergänzung muss `lib/server.js` exakt die am Ende von Änderungsstand 1 erwartete Prüfsumme besitzen:
+
+```text
+2d8796b95be7c1da7a029a2c43dafb995debbfda33aa1f7e35a9c6b45017ee98  lib/server.js
+```
+
+Für die zweite Änderung stehen zwei gleichwertige Darstellungen bereit:
+
+- [`alexa-fhem-startup-retry.patch`](../downloads/alexa-fhem-startup-retry.patch) für die geprüfte Anwendung mit `git apply`;
+- [`alexa-fhem-startup-retry-einfuegetext.txt`](../downloads/alexa-fhem-startup-retry-einfuegetext.txt) mit den drei exakt bezeichneten Einfügestellen und den kopierbaren Codeblöcken.
+
+Die genaue Fehlerursache, Sicherheitsgrenzen, Sicherung, Prüfung und der Rückweg sind im [Nachtrag zum Startup-Wiederanlauf](NACHTRAG-STARTUP-WIEDERANLAUF.md) beschrieben. Diese Schritte vollständig ausführen und nicht nur einzelne Zeilen aus dem Zusammenhang kopieren. Danach muss die Zielprüfsumme lauten:
+
+```text
+cd446c875295d19df5d00cd077a70bc621f8151bbd893b63dc2a2b1669f43192  lib/server.js
+```
+
+Erst mit dieser Prüfsumme ist der hier dokumentierte aktuelle Gesamtstand hergestellt. Danach mit Schritt 6 fortfahren.
+
 ## 6. Alexa-Startpfad setzen und kontrolliert starten
 
 Der FHEM-Befehl `alexaFHEM-cmd` muss weiterhin auf den vorhandenen ausführbaren Starter im Installationsbaum zeigen. Diese Anleitung ändert den FHEM-Startpfad nicht automatisch. Prüfen, dass er auf die bestehende `node_modules/.bin/alexa-fhem`-Datei zeigt und diese ausführbar ist:
