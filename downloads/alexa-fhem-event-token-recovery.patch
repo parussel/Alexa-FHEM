@@ -1,0 +1,319 @@
+diff --git a/lib/server.js b/lib/server.js
+index 54df042..52c9449 100644
+--- a/lib/server.js
++++ b/lib/server.js
+@@ -19,17 +19,27 @@ var FHEM = require('./fhem').FHEM;
+ const util = require('util');
+ 
+ // For ssh proxy: Readings for Amazon provisioned token and SSH status:
+ const BEARERTOKEN_NAME = "alexaFHEM.bearerToken";
+ const SSHSTATUS_NAME = "alexaFHEM.ProxyConnection";
++const EVENT_RECOVERY_COOLDOWN = 300000;
++const EVENT_ERROR_READING = "alexaFHEM.LastEventError";
++const RECOVERY_REASON_READING = "alexaFHEM.LastRecoveryReason";
++const RECOVERY_TIME_READING = "alexaFHEM.LastRecoveryAt";
++const RECOVERY_RESULT_READING = "alexaFHEM.LastRecoveryResult";
++const RECOVERY_COUNT_READING = "alexaFHEM.RecoveryCount";
+ 
+ module.exports = {
+   Server: Server
+ }
+ 
+ function Server() {
+   this._config = this._loadConfig();
++  this._eventRecoveryPromise = undefined;
++  this._eventRecoveryCooldownUntil = 0;
++  this._eventRecoveryCount = 0;
++  this._eventRecoveryStopped = false;
+ 
+   if( Server.as_proxy )
+     this._config.alexa = this._config['alexa-proxy'];
+ 
+   if( !this._config.alexa && !this._config.sshproxy ) {
+@@ -609,10 +619,20 @@ Server.prototype.open_ssh = function() {
+     });
+ */
+   }
+ }
+ 
++Server.prototype._restartSshTunnel = function() {
++  if(this._eventRecoveryStopped) return;
++  if(ssh_client) {
++    ssh_client.removeAllListeners('close');
++    ssh_client.kill();
++    ssh_client = undefined;
++  }
++  this.open_ssh(this._config.sshproxy);
++}
++
+ Server.prototype.addDevice = function(device, fhem) {
+   if( !device.isInScope('alexa.*') ) {
+     log.info( 'ignoring '+ device.name +' for alexa' );
+     return;
+   }
+@@ -1134,10 +1154,11 @@ Server.prototype.run = function() {
+   }
+ }
+ 
+ Server.prototype.shutdown = function() {
+   this._cancelSshStartupRetry();
++  this._cancelEventRecovery();
+   if( this._config.sshproxy )
+     this.set_ssh_state( 'stopping', 'alexa-fhem terminating' );
+ 
+   if( ssh_client ) {
+     log.info('Stopping SSH ...');
+@@ -1290,46 +1311,137 @@ Server.prototype.postReportOrUpdate = function(device) {
+                                           }
+                               }
+                    } );
+ }
+ 
++Server.prototype._now = function() { return Date.now(); }
++
++Server.prototype._isInvalidEventTokenResponse = function(httpResponse, body) {
++  if(!httpResponse || httpResponse.statusCode !== 401) return false;
++  try {
++    const response = JSON.parse(body || '{}');
++    return response && response.payload && response.payload.code === 'INVALID_ACCESS_TOKEN_EXCEPTION';
++  } catch(error) {
++    return /INVALID_ACCESS_TOKEN_EXCEPTION/.test(String(body || ''));
++  }
++}
++
++Server.prototype._setEventRecoveryReading = function(name, value) {
++  this.setreading(name, value);
++}
++
++Server.prototype._cancelEventRecovery = function() {
++  this._eventRecoveryStopped = true;
++}
++
++Server.prototype._sendEvent = function(event, callback) {
++  require('postman-request').post('https://api.eu.amazonalexa.com/v3/events',
++                          { headers :{ 'Content-Type': 'application/json',
++                                       'Authorization': 'Bearer '+ event_token.access_token },
++                               body: JSON.stringify(event) },
++                          callback);
++}
++
++Server.prototype._applyEventToken = function(event) {
++  if(event && event.event && event.event.endpoint && event.event.endpoint.scope)
++    event.event.endpoint.scope.token = event_token.access_token;
++  else if(event && event.event && event.event.payload && event.event.payload.endpoints &&
++          event.event.payload.endpoints[0] && event.event.payload.endpoints[0].scope)
++    event.event.payload.endpoints[0].scope.token = event_token.access_token;
++  else if(event && event.directive && event.directive.endpoint && event.directive.endpoint.scope)
++    event.directive.endpoint.scope.token = event_token.access_token;
++}
++
++Server.prototype._handleEventPostResult = function(event, err, httpResponse, body) {
++  if(err) {
++    log.error('failed to post event: network error');
++    return;
++  }
++  const statusCode = httpResponse ? httpResponse.statusCode : 'unknown';
++  log.info('posted skill event: '+ statusCode);
++  if(this._isInvalidEventTokenResponse(httpResponse, body))
++    this._recoverInvalidEventToken(event);
++}
++
++Server.prototype._recoverInvalidEventToken = function(event) {
++  if(this._eventRecoveryStopped) return Promise.resolve(false);
++  if(this._eventRecoveryPromise) return this._eventRecoveryPromise;
++
++  const now = this._now();
++  if(now < this._eventRecoveryCooldownUntil) {
++    this._setEventRecoveryReading(RECOVERY_RESULT_READING, 'cooldown_active');
++    return Promise.resolve(false);
++  }
++
++  this._eventRecoveryCooldownUntil = now + EVENT_RECOVERY_COOLDOWN;
++  this._eventRecoveryCount++;
++  this._setEventRecoveryReading(EVENT_ERROR_READING, 'invalid_access_token');
++  this._setEventRecoveryReading(RECOVERY_REASON_READING, 'token_invalid');
++  this._setEventRecoveryReading(RECOVERY_TIME_READING, new Date(now).toISOString());
++  this._setEventRecoveryReading(RECOVERY_COUNT_READING, this._eventRecoveryCount);
++  this._setEventRecoveryReading(RECOVERY_RESULT_READING, 'refreshing_token');
++
++  const restartTunnel = () => {
++    if(this._eventRecoveryStopped) return false;
++    this._setEventRecoveryReading(RECOVERY_RESULT_READING, 'tunnel_restart_requested');
++    this._restartSshTunnel();
++    return false;
++  };
++
++  const recovery = new Promise(resolve => {
++    event_token.expires_in = 0;
++    this.updateEventToken(undefined, () => {
++      if(this._eventRecoveryStopped) { resolve(false); return; }
++      this._setEventRecoveryReading(RECOVERY_RESULT_READING, 'retrying_event');
++      this._applyEventToken(event);
++      this._sendEvent(event, (err, httpResponse, body) => {
++        if(this._eventRecoveryStopped) { resolve(false); return; }
++        if(!err && httpResponse && httpResponse.statusCode >= 200 && httpResponse.statusCode < 300) {
++          this._setEventRecoveryReading(RECOVERY_RESULT_READING, 'successful');
++          resolve(true);
++        } else if(httpResponse && httpResponse.statusCode === 401) {
++          resolve(restartTunnel());
++        } else {
++          this._setEventRecoveryReading(RECOVERY_RESULT_READING, 'event_retry_failed');
++          resolve(false);
++        }
++      });
++    }, () => resolve(restartTunnel()));
++  });
++  this._eventRecoveryPromise = recovery;
++  recovery.then(() => {
++    if(this._eventRecoveryPromise === recovery) this._eventRecoveryPromise = undefined;
++  });
++  return recovery;
++}
++
+ Server.prototype.postEvent = function(event) {
++  if(this._eventRecoveryPromise) {
++    const recovery = this._eventRecoveryPromise;
++    recovery.then(success => {
++      if(success && !this._eventRecoveryStopped) this.postEvent(event);
++    });
++    return;
++  }
+   if( !event_token || !event_token.access_token ) {
+     log.error( 'no event token available' );
+     return;
+   }
+   if( Date.now() >= event_token.expires_in ) {
+     this.updateEventToken(undefined, function(event) { this.postEvent(event); }.bind(this, event) );
+     return;
+   }
+-  log.info( JSON.stringify(event) );
+-
+-  if( event && event.event && event.event.endpoint && event.event.endpoint.scope )
+-    event.event.endpoint.scope.token = event_token.access_token;
+-  else if( event && event.event && event.event.payload && event.event.payload.endpoints && event.event.payload.endpoints[0] && event.event.payload.endpoints[0].scope )
+-    event.event.payload.endpoints[0].scope.token = event_token.access_token;
++  this._applyEventToken(event);
+ 
+     log.info( 'posting skill event' );
+     //var request = require('request');
+     //require('request-debug')(request);
+     //request.post('https://api.eu.amazonalexa.com/v3/events',
+-    require('postman-request').post('https://api.eu.amazonalexa.com/v3/events',
+-                            { headers :{ 'Content-Type': 'application/json',
+-                                         'Authorization': 'Bearer '+ event_token.access_token },
+-                                 //body: '{"data":{ "sampleMessage": "Sample Message"}, "expiresAfterSeconds": 60 }' },
+-                                 body: JSON.stringify(event) },
+-                            function(err, httpResponse, body) {
+-                              if( err ) {
+-                                log.error( 'failed to post event: '+ httpResponse.statusCode + ': ' +err);
+-                                return;
+-                              }
+-
+-                              log.info( 'posted skill event: '+ httpResponse.statusCode + ': ' +body );
+-                            } );
++    this._sendEvent(event, this._handleEventPostResult.bind(this, event));
+ }
+ 
+-Server.prototype.refreshToken = function(token, callback) {
++Server.prototype.refreshToken = function(token, callback, errorCallback) {
+   var permissions = {};
+   var url = 'https://api.amazon.com/auth/O2/token';
+   if( !this._config.alexa || !this._config.alexa.permissions ) {
+     if( this._config.sshproxy ) {
+       url = 'https://va.fhem.de/proxy/oauth';
+@@ -1349,19 +1461,21 @@ Server.prototype.refreshToken = function(token, callback) {
+                                     'refresh_token': token.refresh_token,
+                                     'client_id': permissions.client_id?permissions.client_id:'',
+                                     'client_secret': permissions.client_secret?permissions.client_secret:'' } },
+                           function(err, httpResponse, body) {
+                             if( err ) {
+-                              log.error( 'failed to refresh token: '+ err);
++                              log.error( 'failed to refresh token: network error');
++                              if( errorCallback ) errorCallback(err);
+                               return;
+                             }
+ 
+                             const contentType = httpResponse.headers['content-type'];
+                             if( contentType && contentType.match('application/json') ) {
+                               var json = JSON.parse(body);
+                               if( json.error ) {
+-                                log.error( 'failed to refresh token: '+ json.error +': \''+ json.error_description +'\'');
++                                log.error( 'failed to refresh token: '+ json.error);
++                                if( errorCallback ) errorCallback(new Error(json.error));
+                                 return;
+                               }
+ 
+                               log.info( 'got fresh token' );
+                               json.expires_in = json.expires_in * 1000 + Date.now();
+@@ -1369,28 +1483,30 @@ Server.prototype.refreshToken = function(token, callback) {
+                                 token[key] = json[key];
+ 
+                               if( callback ) callback(token);
+ 
+                             } else {
+-                              log.error( 'failed to refresh token: '+ body);
++                              log.error( 'failed to refresh token: invalid response');
++                              if( errorCallback ) errorCallback(new Error('invalid token refresh response'));
+                               return;
+                             }
+ 
+                           }.bind(this) );
+ }
+ 
+ var event_token = {'expires': 0};
+-Server.prototype.updateEventToken = function(grant,callback) {
++Server.prototype.updateEventToken = function(grant,callback,errorCallback) {
+   if( Date.now() < event_token.expires_in ) {
+     if( callback ) callback();
+ 
+   } else if( event_token.refresh_token ) {
+-    this.refreshToken(event_token, function(token) { event_token = token; if( callback ) callback(); }.bind(this) );
++    this.refreshToken(event_token, function(token) { event_token = token; if( callback ) callback(); }.bind(this), errorCallback );
+ 
+   } else {
+     if( !grant ) {
+       log.error('no grant for event token update');
++      if( errorCallback ) errorCallback(new Error('no grant for event token update'));
+       return;
+     }
+ 
+     var permissions = {};
+     var url = 'https://api.amazon.com/auth/O2/token';
+@@ -1414,19 +1530,21 @@ Server.prototype.updateEventToken = function(grant,callback) {
+                                       'code': grant.grant.code,
+                                       'client_id': permissions.client_id?permissions.client_id:'',
+                                       'client_secret': permissions.client_secret?permissions.client_secret:'' } },
+                             function(err, httpResponse, body) {
+                               if( err ) {
+-                                log.error( 'failed to get event token: '+ err);
++                              log.error( 'failed to get event token: network error');
++                              if( errorCallback ) errorCallback(err);
+                                 return;
+                               }
+ 
+                               const contentType = httpResponse.headers['content-type'];
+                               if( contentType && contentType.match('application/json') ) {
+                                 var json = JSON.parse(body);
+                                 if( json.error ) {
+-                                  log.error( 'failed to get event token: '+ json.error +': \''+ json.error_description +'\'');
++                                log.error( 'failed to get event token: '+ json.error);
++                                if( errorCallback ) errorCallback(new Error(json.error));
+                                   return;
+                                 }
+ 
+                                 this.setreading( '.eventToken', body );
+ 
+@@ -1435,11 +1553,12 @@ Server.prototype.updateEventToken = function(grant,callback) {
+                                 event_token.expires_in = event_token.expires_in * 1000 + Date.now();
+ 
+                                 if( callback ) callback();
+ 
+                               } else {
+-                                log.error( 'failed to get event token: '+ body);
++                              log.error( 'failed to get event token: invalid response');
++                              if( errorCallback ) errorCallback(new Error('invalid event token response'));
+                                 return;
+                               }
+ 
+                             }.bind(this) );
+   }

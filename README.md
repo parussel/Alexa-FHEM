@@ -10,6 +10,9 @@ Diese deutschsprachige Anleitung beschreibt, wie erfahrene FHEM-Anwender eine vo
 - [Nachtrag: automatischer Wiederanlauf nach DNS-/Netzfehler beim Start](docs/NACHTRAG-STARTUP-WIEDERANLAUF.md)
 - [Einfüge-Patch für den Wiederanlauf](downloads/alexa-fhem-startup-retry.patch)
 - [Kopiertext für die drei Einfügestellen](downloads/alexa-fhem-startup-retry-einfuegetext.txt)
+- [Nachtrag: automatische Wiederherstellung bei ungültigem Ereignis-Token](docs/NACHTRAG-EVENT-TOKEN-WIEDERHERSTELLUNG.md)
+- [Einfüge-Patch für die Token-Wiederherstellung](downloads/alexa-fhem-event-token-recovery.patch)
+- [Kopiertext für die Token-Wiederherstellung](downloads/alexa-fhem-event-token-recovery-einfuegetext.txt)
 - [Hilfsdatei `native-ssh.js` herunterladen](downloads/native-ssh.js)
 - [Herkunft und Zuordnung](ATTRIBUTION.md)
 - [153er-netz.de – Entwicklung](https://153er-netz.de/seiten/entwicklung/fhem.html)
@@ -32,9 +35,18 @@ Der neue [Nachtrag](docs/NACHTRAG-STARTUP-WIEDERANLAUF.md) ergänzt für den hie
 | --- | --- | --- |
 | Ausgangsbasis | Alexa-FHEM 0.5.64 | Unveränderter Upstream-Stand; nicht Bestandteil dieses Repositorys |
 | Änderungsstand 1 | Lokale RSA/SHA2-Umstellung | Paketkennung `0.5.64-sha2.1`; native SSH-Verbindung mit bestehender Identität und Registrierung |
-| Änderungsstand 2 | Änderungsstand 1 plus Startup-Wiederanlauf | Aktueller hier geprüfter Gesamtstand; `lib/server.js` erhält den begrenzten DNS-/Netz-Wiederanlauf |
+| Änderungsstand 2 | Änderungsstand 1 plus Startup-Wiederanlauf | `lib/server.js` erhält den begrenzten DNS-/Netz-Wiederanlauf |
+| Änderungsstand 3 | Änderungsstand 2 plus Ereignis-Token-Wiederherstellung | Aktueller geprüfter Gesamtstand; einmalige Token-Erneuerung und Ereigniswiederholung bei Amazons `INVALID_ACCESS_TOKEN_EXCEPTION` |
 
-Änderungsstand 2 baut zwingend auf Änderungsstand 1 auf. Die Paketkennung bleibt `0.5.64-sha2.1`, weil die zweite Ergänzung nur `lib/server.js` ändert und `package.json` bewusst unangetastet lässt. Die [Hauptanleitung](docs/ANLEITUNG-LOKALE-ALEXA-FHEM-SHA2-UMSTELLUNG.md) führt nun in einer Reihenfolge durch beide Änderungen bis zum aktuell getesteten Gesamtstand.
+Die Änderungsstände bauen zwingend in der angegebenen Reihenfolge aufeinander auf. Die Paketkennung bleibt `0.5.64-sha2.1`, weil die Ergänzungen 2 und 3 nur `lib/server.js` ändern und `package.json` bewusst unangetastet lassen. Die [Hauptanleitung](docs/ANLEITUNG-LOKALE-ALEXA-FHEM-SHA2-UMSTELLUNG.md) führt in einer Reihenfolge bis zum aktuell getesteten Gesamtstand.
+
+## Nachtrag: Ereignis-Token automatisch wiederherstellen (15.11.2026)
+
+Ein weiterer realer Fehlerfall zeigte ein zweites asymmetrisches Verhalten: Temperaturwerte konnten weiterhin abgefragt werden und ein manueller Alexa-FHEM-Neustart stellte Schaltbefehle wieder her, während zuvor ausgehende Statusmeldungen mit `401 INVALID_ACCESS_TOKEN_EXCEPTION` abgewiesen wurden. Änderungsstand 3 erneuert in diesem eng begrenzten Fall sofort den Ereignis-Token und wiederholt ausschließlich das fehlgeschlagene Ereignis genau einmal.
+
+Gleichzeitige Fehlerbehandlungen werden zusammengeführt; eine fünfminütige Sperrzeit verhindert Wiederholungsschleifen. Scheitert die Erneuerung oder liefert auch der einmalige Wiederholungsversuch HTTP 401, wird der SSH-Tunnel höchstens einmal neu aufgebaut. Diagnose-Readings bleiben am FHEM-Gerät `alexa` erhalten. Zugangstoken und Antwortinhalte werden nicht ins Protokoll geschrieben.
+
+Der Fehlerweg wurde am 15.11.2026 kontrolliert auf dem Referenzsystem provoziert. Ergebnis: `LastRecoveryReason = token_invalid`, `LastRecoveryResult = successful`, `RecoveryCount = 1`; der reale Lichtbefehl wurde ausgeführt. Damit ist die Wiederherstellung der aktiven Ereignismeldung nachgewiesen. Da eingehende Schaltbefehle bereits vor Einbau dieses Patches durch einen manuellen Neustart wieder funktionierten, ist nicht nachgewiesen, dass der ungültige Ereignis-Token allein die frühere Nichterreichbarkeit verursacht hatte. Der [Nachtrag](docs/NACHTRAG-EVENT-TOKEN-WIEDERHERSTELLUNG.md) beschreibt Sicherung, Einbau, Prüfung und Rückweg vollständig.
 
 ## Nachtrag: Veraltete Temperaturwerte in Alexa (22.10.2026)
 

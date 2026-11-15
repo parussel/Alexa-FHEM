@@ -392,7 +392,31 @@ Die genaue Fehlerursache, Sicherheitsgrenzen, Sicherung, Prüfung und der Rückw
 cd446c875295d19df5d00cd077a70bc621f8151bbd893b63dc2a2b1669f43192  lib/server.js
 ```
 
-Erst mit dieser Prüfsumme ist der hier dokumentierte aktuelle Gesamtstand hergestellt. Danach mit Schritt 6 fortfahren.
+Mit dieser Prüfsumme ist Änderungsstand 2 hergestellt. Vor Schritt 6 folgt noch Änderungsstand 3.
+
+### 5b. Änderungsstand 3: Ereignis-Token automatisch wiederherstellen
+
+Änderungsstand 3 baut zwingend auf Änderungsstand 2 auf. Er behandelt ausschließlich Amazons HTTP-401-Antwort `INVALID_ACCESS_TOKEN_EXCEPTION` bei aktiven Ereignismeldungen: Token sofort erneuern, das betroffene Ereignis genau einmal wiederholen und Wiederholungsschleifen durch eine fünfminütige Sperre verhindern. Diagnose-Readings bleiben in FHEM sichtbar.
+
+Vor der Ergänzung muss `lib/server.js` exakt diese Prüfsumme besitzen:
+
+```text
+cd446c875295d19df5d00cd077a70bc621f8151bbd893b63dc2a2b1669f43192  lib/server.js
+```
+
+Bereitgestellt werden:
+
+- [`alexa-fhem-event-token-recovery.patch`](../downloads/alexa-fhem-event-token-recovery.patch) zur geprüften Anwendung mit `git apply`;
+- [`alexa-fhem-event-token-recovery-einfuegetext.txt`](../downloads/alexa-fhem-event-token-recovery-einfuegetext.txt) mit bezeichneten Einfüge- und Ersetzungsstellen;
+- der vollständige [Nachtrag zur Ereignis-Token-Wiederherstellung](NACHTRAG-EVENT-TOKEN-WIEDERHERSTELLUNG.md) mit Ursache, Sicherheitsgrenzen, Diagnose, Test und Rückweg.
+
+Nach erfolgreicher Anwendung und `node --check lib/server.js` muss die Zielprüfsumme lauten:
+
+```text
+12ade3e2241bdb1f9fd4024ee8d76c7c05a46c33fa810860f3b391d14fb67a5  lib/server.js
+```
+
+Erst damit ist der hier dokumentierte aktuelle Gesamtstand hergestellt. Danach mit Schritt 6 fortfahren.
 
 ## 6. Alexa-Startpfad setzen und kontrolliert starten
 
