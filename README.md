@@ -13,6 +13,9 @@ Diese deutschsprachige Anleitung beschreibt, wie erfahrene FHEM-Anwender eine vo
 - [Nachtrag: automatische Wiederherstellung bei ungültigem Ereignis-Token](docs/NACHTRAG-EVENT-TOKEN-WIEDERHERSTELLUNG.md)
 - [Einfüge-Patch für die Token-Wiederherstellung](downloads/alexa-fhem-event-token-recovery.patch)
 - [Kopiertext für die Token-Wiederherstellung](downloads/alexa-fhem-event-token-recovery-einfuegetext.txt)
+- [Nachtrag: einmaliger Wiederanlauf nach `rereadcfg`](docs/NACHTRAG-REREADCFG-WIEDERANLAUF.md)
+- [FHEM-Hilfsdatei für den Wiederanlauf](downloads/99_myUtils_AlexaRecovery.pm)
+- [Kopiertext mit zusätzlichem Notify-Device](downloads/alexa-fhem-rereadcfg-recovery-einfuegetext.txt)
 - [Hilfsdatei `native-ssh.js` herunterladen](downloads/native-ssh.js)
 - [Herkunft und Zuordnung](ATTRIBUTION.md)
 - [153er-netz.de – Entwicklung](https://153er-netz.de/seiten/entwicklung/fhem.html)
@@ -23,7 +26,7 @@ Die Anleitung setzt eine bestehende Installation auf Basis von Version 0.5.64 un
 
 Veröffentlicht werden die Anleitung und die eigens erstellte Hilfsdatei. Die vollständigen Upstream-Dateien, private Testdaten und interne Entwicklungsunterlagen sind nicht Bestandteil dieses Repositorys. Die Anleitung enthält die erforderlichen Änderungsblöcke, damit Nutzer die Anpassung lokal selbst vornehmen können.
 
-## Nachtrag: automatischer Wiederanlauf des SSH-Tunnels (11.11.2026)
+## Nachtrag: automatischer Wiederanlauf des SSH-Tunnels (15.11.2026)
 
 Nach einem Raspberry-Neustart trat während der einmaligen Proxy-Konfigurationsprüfung ein vorübergehender DNS-/Netzfehler auf. Ausgehende Temperaturmeldungen funktionierten anschließend wieder, eingehende Alexa-Schaltbefehle jedoch nicht: Der eigentliche SSH-Tunnel war wegen des fehlgeschlagenen Startchecks nie geöffnet worden, sodass dessen vorhandene Reconnect-Logik nicht greifen konnte.
 
@@ -37,8 +40,17 @@ Der neue [Nachtrag](docs/NACHTRAG-STARTUP-WIEDERANLAUF.md) ergänzt für den hie
 | Änderungsstand 1 | Lokale RSA/SHA2-Umstellung | Paketkennung `0.5.64-sha2.1`; native SSH-Verbindung mit bestehender Identität und Registrierung |
 | Änderungsstand 2 | Änderungsstand 1 plus Startup-Wiederanlauf | `lib/server.js` erhält den begrenzten DNS-/Netz-Wiederanlauf |
 | Änderungsstand 3 | Änderungsstand 2 plus Ereignis-Token-Wiederherstellung | Aktueller geprüfter Gesamtstand; einmalige Token-Erneuerung und Ereigniswiederholung bei Amazons `INVALID_ACCESS_TOKEN_EXCEPTION` |
+| FHEM-Nachtrag | Änderungsstand 3 plus lokale `rereadcfg`-Sicherung | Zusätzliche Hilfsdatei und Notify-Device; `lib/server.js` bleibt unverändert |
 
 Die Änderungsstände bauen zwingend in der angegebenen Reihenfolge aufeinander auf. Die Paketkennung bleibt `0.5.64-sha2.1`, weil die Ergänzungen 2 und 3 nur `lib/server.js` ändern und `package.json` bewusst unangetastet lassen. Die [Hauptanleitung](docs/ANLEITUNG-LOKALE-ALEXA-FHEM-SHA2-UMSTELLUNG.md) führt in einer Reihenfolge bis zum aktuell getesteten Gesamtstand.
+
+Der FHEM-Nachtrag ist davon getrennt: Er ergänzt die selbst erstellte Datei `99_myUtils_AlexaRecovery.pm` und das Device `alexaRecoveryAfterReread`, ändert aber keinen JavaScript-Änderungsstand.
+
+## Nachtrag: Wiederanlauf nach `rereadcfg` (15.11.2026)
+
+Ein realer Ausfall zeigte einen dritten, unabhängigen Fehlerweg: Nach zweimaligem `rereadcfg` blieb das FHEM-Gerät `alexa` vorhanden, der zugehörige Prozess lief jedoch nicht mehr. Temperaturwerte konnten weiterhin genannt werden, während sämtliche getesteten Schaltaktoren als nicht erreichbar gemeldet wurden.
+
+Die neue FHEM-seitige Sicherung reagiert ausschließlich auf das Ereignis `REREADCFG`, wartet 15 Sekunden und prüft dann den tatsächlichen Prozesszustand. Fehlt der Prozess, wird genau ein kontrollierter Start erlaubt; eine zweite Prüfung hält Erfolg oder Fehlschlag in Readings fest. Ein bewusstes Stoppen außerhalb dieses Prüfzeitfensters wird respektiert. Der [vollständige Nachtrag](docs/NACHTRAG-REREADCFG-WIEDERANLAUF.md) enthält Ursache, Installation, zusätzliche Devices, Diagnose, Testnachweis und Rückweg.
 
 ## Nachtrag: Ereignis-Token automatisch wiederherstellen (15.11.2026)
 

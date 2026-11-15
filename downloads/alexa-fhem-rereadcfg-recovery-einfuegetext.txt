@@ -1,0 +1,65 @@
+ALEXA-FHEM: EINMALIGER WIEDERANLAUF NACH REREADCFG
+Stand: 15.11.2026
+
+Dieser Nachtrag veraendert nicht lib/server.js. Er besteht aus einer neuen,
+eigenstaendigen FHEM-Hilfsdatei und einem zusaetzlichen Notify-Device.
+
+1. DATEI HERUNTERLADEN UND ABLEGEN
+
+Die Datei
+
+  downloads/99_myUtils_AlexaRecovery.pm
+
+nach
+
+  /opt/fhem/FHEM/99_myUtils_AlexaRecovery.pm
+
+kopieren. Vorhandene Dateien niemals ungeprueft ueberschreiben. Rechte und
+Eigentuemer an die uebrigen Dateien in /opt/fhem/FHEM anpassen.
+
+2. GENAU DIESEN BLOCK AM ENDE DER EIGENEN ALEXA-KONFIGURATION ERGAENZEN
+
+Im Referenzsystem ist dies /opt/fhem/mycfg/60_alexa.cfg:
+
+# Lokale Wiederanlaufsicherung: 15 Sekunden nach rereadcfg einmalig pruefen.
+define alexaRecoveryAfterReread notify global:REREADCFG {AlexaRecovery_AfterReread("alexa")}
+attr alexaRecoveryAfterReread room System
+
+Der interne Geraetename "alexa" muss zur eigenen Installation passen.
+
+3. OHNE FHEM-NEUSTART LADEN
+
+In der FHEM-Befehlszeile nacheinander ausfuehren:
+
+reload 99_myUtils_AlexaRecovery.pm
+define alexaRecoveryAfterReread notify global:REREADCFG {AlexaRecovery_AfterReread("alexa")}
+attr alexaRecoveryAfterReread room System
+
+Existiert das Device bereits, nicht erneut definieren. Kein rereadcfg nur fuer
+die Installation ausloesen. Nach erfolgreicher Kontrolle die eigene
+FHEM-Konfiguration auf dem ueblichen Weg sichern.
+
+4. SICHTBARE DIAGNOSE AM DEVICE alexa
+
+alexaRecoveryState
+alexaRecoveryReason
+alexaRecoveryLastAttempt
+alexaRecoveryLastResult
+alexaRecoveryCount
+alexaRecoveryAttempted
+
+Die Automatik wird nur durch das globale Ereignis REREADCFG scharfgeschaltet.
+Sie prueft 15 Sekunden spaeter, ob der lokale alexa-fhem-Prozess fehlt. Pro
+Fehlerfall ist genau ein Start erlaubt. Nach weiteren 15 Sekunden wird nur
+noch Erfolg oder Fehlschlag festgestellt. Ein bewusstes "set alexa stop"
+ausserhalb dieses Zeitfensters wird nicht rueckgaengig gemacht.
+
+5. RUECKWEG
+
+In FHEM:
+
+delete alexaRecoveryAfterReread
+
+Danach den oben genannten Block aus der eigenen Konfigurationsdatei entfernen
+und /opt/fhem/FHEM/99_myUtils_AlexaRecovery.pm erst nach einer Sicherung
+loeschen oder aus dem FHEM-Modulverzeichnis verschieben.
